@@ -1,0 +1,34 @@
+//几何函数
+macro alpha(d) (ksi*d+(1.-ksi)*d^2.) //
+macro dalpha(d) (ksi+2.*(1.-ksi)*d) //
+macro ddalpha(d) (2.*(1.-ksi)) //
+//退化函数1
+macro fac1(d) ((1.-d)^p) // 
+macro dfac1(d) (-p*(1.-d)^(p-1.)) // 
+macro ddfac1(d) (p*(p-1.)*(1.-d)^(p-2.)) //
+//退化函数2
+macro fac2(d) (fac1(d)+a1*d+a1*a2*d^2.+a1*a2*a3*d^3.) // 
+macro dfac2(d) (dfac1(d)+a1+2.*a1*a2*d+3.*a1*a2*a3*d^2.) // 
+macro ddfac2(d) (ddfac1(d)+2.*a1*a2+6.*a1*a2*a3*d) // 
+//退化函数
+macro omega(d) (fac1(d)/fac2(d)+SMALL) //EOM
+macro domega(d) (dfac1(d)*fac2(d)-fac1(d)*dfac2(d))/(fac2(d)^2) //EOM
+macro ddomega(d) ((ddfac1(d)*fac2(d)-fac1(d)*ddfac2(d))*fac2(d)-2*(dfac1(d)*fac2(d)-fac1(d)*dfac2(d))*dfac2(d))/(fac2(d)^3) //EOM 
+//拉梅常数
+macro lambda(E, nu) (E*nu/((1.+nu)*(1.-2.*nu))) //
+macro mu(E, nu) (E/(2.*(1.+nu))) //
+//刚度矩阵
+macro Q(E,nu) [[lambda(E,nu)+2.*mu(E,nu), lambda(E,nu), 0.],
+               [lambda(E,nu), lambda(E,nu)+2.*mu(E,nu), 0.],
+               [0., 0., mu(E,nu)]] //
+//温度梯度
+macro gradT(T) [dx(T),dy(T)]//
+//应变
+macro epsilon(u,v) [dx(u),dy(v),dx(v)+dy(u)]//
+macro epsilonxx(u,v) dx(u) //
+macro epsilonyy(u,v) dy(v) // 
+macro gammaxy(u,v) (dy(u)+dx(v)) //
+//相场梯度
+macro gradd(d) [dx(d),dy(d)]//
+//转换矩阵
+macro Ie [1.,1.,0.]//

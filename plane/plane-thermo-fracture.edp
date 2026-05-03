@@ -1,0 +1,211 @@
+//引用头文件
+load "PETSc"
+load "iovtk"
+load "gmsh"
+load "lapack"
+load "ff-Ipopt"
+include "macro_ddm.idp"
+include "macro.edp"
+include "function.edp"
+macro dimension()2// EOM
+//材料参数
+real E=340e3, nu=0.22, sigma0=180, Gc=0.0425, rho=3.72e-3, c=0.775, k0=0.3, alpha0=8e-6, eta=1e-5,
+     T0=680, Tenv=300, SMALL=1e-8;
+//相场参数
+real ksi=2, c0=pi, l0=0.03; //pf-CZM
+//退化函数参数
+real a1=2.0*ksi/c0*(E*Gc/sigma0^2)/l0, a2=-0.5, a3=0, p=2;
+//前向差分算法/Newmark算法参数
+real deltat, gamma, delta;
+deltat = 5.0e-7; gamma = 0.6; delta = 0.25*(0.5+gamma)^2;
+real b0 = 1.0/delta/deltat^2, b1 = gamma/delta/deltat, b2 = 1.0/delta/deltat, b3 = 1.0/2.0/delta-1.0, 
+     b4 = gamma/delta-1.0, b5 = deltat/2.0*(gamma/delta-2.0), b6 = deltat*(1.0-gamma), b7 = gamma*deltat;
+//模型求解参数
+real maxIterations=2e7;
+//求解中间变量
+real count, percentage;
+//输出历史变量
+real strainEnergy, kineEnergy, crackEnergy, localStrainEnergy, localKineEnergy, localCrackEnergy;
+//导入几何模型
+if(mpirank == 0) 
+	mesh Th=gmshload("mesh/plane.msh");
+broadcast(processor(0),Th);
+buildDmesh(Th);
+//定义有限元空间
+func singleP0 = P0; 
+func singleP1 = P1; 
+func doubleP1 = [P1,P1];
+fespace Vh(Th,doubleP1), Eh(Th,singleP0), Ph(Th,singleP1);
+//温度场有关变量
+Ph T, Tv, Told, Tinit;
+Eh dT;
+//位移场有关变量
+Vh [u,v],[u1,v1],[vv1,vv2],[aa1,aa2],[uold,vold],[vv1old,vv2old],[aa1old,aa2old];
+Eh[int] e(3);
+Ph tempu=0., tempv=0., tempw=0., tempvv2=0., tempaa2=0.;
+Eh mises=0.;
+//相场有关变量
+Ph d, d1, damage;
+Eh H, energyplus;
+Eh ALPHA, DALPHA, DDALPHA, OMEGA, DOMEGA, DDOMEGA;
+//网格自由度数
+int DofP0 = Vh.ndof;
+int DofP1 = Eh.ndof;
+int DofP2 = Ph.ndof;
+//定义变分
+//温度场
+varf TempEq(T,Tv) = int2d(Th)(rho*c/deltat*T*Tv)+int2d(Th)(OMEGA*k0*gradT(T)'*gradT(Tv))
+                    + int2d(Th)(rho*c/deltat*Told*Tv)
+                    + on(3,T=Tenv);
+varf BasisT(T,Tv) = int2d(Th)(T*Tv) + on(3,T=Tenv-T0);	
+//位移场                                        
+varf StiffEq([u,v],[u1,v1]) = int2d(Th)(b0*rho*[u,v]'*[u1,v1])
+                              + int2d(Th)(OMEGA*epsilon(u,v)'*Q(E,nu)*epsilon(u1,v1))
+                              + int2d(Th)(dT*OMEGA*alpha0*(Q(E,nu)*Ie)'*epsilon(u1,v1))
+                              + int2d(Th)(b0*rho*[uold,vold]'*[u1,v1])
+                              + int2d(Th)(b2*rho*[vv1old,vv2old]'*[u1,v1])
+                              + int2d(Th)(b3*rho*[aa1old,aa2old]'*[u1,v1])
+							  + on(1,v=0) + on(2,u=0) + on(4,u=0);					   
+//相场
+varf PhaseField(d,d1) = int2d(Th)(eta/deltat*d*d1)
+						+ int2d(Th)(2*Gc*l0/c0*gradd(d)'*gradd(d1))
+                        - int2d(Th)((DOMEGA*H+DALPHA*Gc/c0/l0)*d1)
+						+ int2d(Th)(eta/deltat*damage*d1);
+//温度场矩阵初始化
+Mat Ktt, Kba;
+{
+	macro def(i) i //
+	macro init(i) i //
+	createMat(Th, Ktt, singleP1); createMat(Th, Kba, singleP1); 
+}	
+set(Ktt, sparams="-pc_type hypre"); set(Kba, sparams="-pc_type hypre");
+//位移场矩阵初始化
+Mat Keq;
+{
+	macro def(i)[i, i#B]//
+	macro init(i)[i, i]//
+	createMat(Th, Keq, doubleP1); 
+}
+set(Keq, sparams="-pc_type hypre"); 
+//相场矩阵初始化
+Mat Kpp;
+{
+	macro def(i) i //
+	macro init(i) i //
+	createMat(Th, Kpp, singleP1);
+}	
+set(Kpp, sparams="-pc_type hypre");
+//温度场初始化
+Kba = BasisT(Ph,Ph);
+real[int] Qt = BasisT(0,Ph);
+Tinit[] = Kba^-1*Qt;
+Tinit = Tinit+T0; Told = Tinit; dT = 0;
+//位移场初始化
+[uold,vold]=[0.,0.];
+[vv1old,vv2old]=[0.,0.];
+[aa1old,aa2old]=[0.,0.];
+//相场初始化
+damage = 0; DOMEGA = domega(damage); DDOMEGA = ddomega(damage); 
+H = sigma0^2./2./E;
+//保存历史数据
+ofstream Fx("output/time-force.txt");
+if(mpirank==0)
+{
+    Fx<<"time strain_energy kine_energy crack_energy"<<endl;
+}
+//paraview
+int[int] vtuOrder=[1,1,1,1,1,0,1,0,1];
+savevtk("output/paraview/damage.vtu", Th, T, tempu, tempv, tempvv2, tempaa2, mises, damage, H, dT,
+        dataname="temp u v vv2 aa2 mises damage H dT", order=vtuOrder);
+//等待所有进程完成
+mpiBarrier(mpiCommWorld);
+//增量步求解
+count = 0;
+while (count<maxIterations)
+{
+	//求解温度场
+	OMEGA = omega(damage);
+	Ktt = TempEq(Ph, Ph);
+	real[int] Qt = TempEq(0, Ph);
+	T[] = Ktt^-1*Qt;
+	dT = T-Tinit;
+	//求解位移场
+	Keq = StiffEq(Vh,Vh);
+    real[int] Qu = StiffEq(0, Vh);
+    u[] = Keq^-1*Qu;
+	//计算相场求解所需参数
+    ALPHA = alpha(damage);
+    DALPHA = dalpha(damage);
+    DDALPHA = ddalpha(damage);
+    DOMEGA = domega(damage);
+    DDOMEGA = ddomega(damage);
+	//求解历史变量
+	real[int] reale(3);
+	e[0] = dx(u); e[1] = dy(v); e[2] = dx(v)+dy(u);
+    for(int i = 0; i < DofP1; i++)
+    {
+		reale(0) = e[0][](i)-alpha0*dT[](i); reale(1) = e[1][](i)-alpha0*dT[](i); reale(2) = e[2][](i);
+		real energyplus = MaxPrinEnergy(reale,E,nu);
+        if(H[](i)<energyplus)
+        {
+            H[](i)=energyplus;
+        }
+		mises[](i) = ComputeMises(reale,E,nu);
+		mises[](i) = OMEGA[](i)*mises[](i);
+    }
+	//进程同步
+	mpiBarrier(mpiCommWorld);
+    //求解相场
+    Kpp = PhaseField(Ph,Ph);
+    real[int] Qp = PhaseField(0,Ph);
+    d[] = Kpp^-1*Qp;
+    //不可逆性与有界性
+    for(int i = 0; i < DofP2; i++)
+    {
+        if(d[](i)<damage[](i))
+        {
+            d[](i) = damage[](i);
+        }
+		if(d[](i)>1.0)
+        {
+            d[](i) = 1.0;
+        }
+        else if(d[](i)<0)
+        {
+            d[](i) = 0;
+        }
+    }
+    //输出迭代信息
+    if(mpirank==0)
+	{
+		percentage = count/maxIterations;
+		cout<<"count = "<<count<<" percentage = "<<percentage*100<<"%"<<endl;
+	}
+	//更新温度、速度、加速度、相场
+	Told = T; 
+	for(int i = 0; i < DofP0; i++)
+    {
+        aa1[](i) = b0*(u[](i)-uold[](i)) - b2*vv1old[](i) - b3*aa1old[](i);
+        vv1[](i) = vv1old[](i) + b6*aa1old[](i) + b7*aa1[](i);
+    }
+    [uold,vold] = [u,v]; [vv1old,vv2old] = [vv1,vv2]; [aa1old,aa2old] = [aa1,aa2];
+	damage = d;
+    //输出paraview
+	tempu=u; tempv=v; tempvv2=vv2; tempaa2=aa2;
+    if(count%50==0)
+    {
+        savevtk("output/paraview/damage.vtu", Th, T, tempu, tempv, tempvv2, tempaa2, mises, damage, H, dT,
+        dataname="temp u v vv2 aa2 mises damage H dT", order=vtuOrder, append=true);
+    }
+    //输出direct
+    
+    //打印进行的迭代步
+    count = count+1;
+	if(mpirank==0)
+	{
+		cout<<"step = "<<count<<endl;
+	}
+	//进程同步
+	mpiBarrier(mpiCommWorld);
+}
+cout<<"here"<<endl;

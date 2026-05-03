@@ -1,0 +1,50 @@
+load "lapack"
+//定义取正函数
+func real isplus(real a)
+{
+    real num = 0;
+    if(a>0)
+    {
+        num = a;
+    }
+    return num;
+}
+//最大主应变
+func real maxSigma(real[int] sigma)
+{
+    real sxx = sigma(0);
+    real syy = sigma(1);
+    real sxy = sigma(2);
+
+    real avg = 0.5*(sxx + syy);
+    real rad = sqrt(0.25*(sxx - syy)^2 + sxy^2);
+
+    real maxS = avg + rad;
+    return maxS; // 最大主应力
+}
+//最大应力分解
+func real MaxPrinEnergy(real[int] e, real E, real nu)
+{
+    real energy, maxS;
+    real[int] sigma(3);
+    real[int,int] Q0(3,3);
+    Q0 = Q(E,nu);
+    sigma = Q0*e;
+    maxS = maxSigma(sigma);
+    energy = 0.5*maxS^2/E;
+    return energy;
+}
+//Mises应力
+func real ComputeMises(real[int] e, real E, real nu)
+{
+    real[int] sigma(3);
+	real[int,int] Q0(6,6);
+    Q0 = Q(E,nu);
+    sigma = Q0*e;
+    real sxx = sigma(0);
+    real syy = sigma(1);
+    real sxy = sigma(2);
+    real szz = nu*(sxx + syy); // plane strain
+    real mises = sqrt(0.5*((sxx-syy)^2+(syy-szz)^2+(szz-sxx)^2)+3*sxy^2);
+    return mises;
+}
