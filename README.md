@@ -22,7 +22,6 @@ This implementation is based on the following works:
 - **Degradation function**: pf-CZM (phase-field cohesive zone model) approach with controlled softening
 - **Tensile/compressive split**: Maximum principal stress-based energy driving force for fracture
 - **PETSc parallelization**: Distributed memory parallel computing for large-scale 3D problems
-- **Thermal shock loading**: Both constant and time-dependent surface temperature boundary conditions
 
 ## Methodology
 
@@ -82,7 +81,7 @@ thermo-fracture-phase-field/
 
 ### 2D Square Plate under Thermal Shock (`plane/`)
 
-A 2D square plate with an initial edge crack is subjected to sudden cooling on the top and bottom edges. The thermal shock generates tensile stresses near the cooled surfaces, driving crack propagation from the pre-existing notch.
+A 2D square plate with an initial edge crack is subjected to sudden cooling on the top and bottom edges. The thermal shock generates tensile stresses near the cooled surfaces, driving crack propagation from the surface.
 
 **Material properties** (typical ceramic):
 | Parameter | Value | Description |
